@@ -1,17 +1,17 @@
-title: "戦国砲術師"
-summary: "現代の理系大学生が戦国時代にタイムスリップし、数学と物理学の知識を活かして砲術の革新を起こす物語"
-topics: ["小説", "戦国時代", "転生", "歴史", "ファンタジー"]
-published: false
+title: "戦国砲術師　～高専生のポケコンが変えた歴史～"
+summary: "現代の高専生がポケコンPC-G850VSとともに戦国時代にタイムスリップ。数学と物理の知識を活かして砲術を革新し、歴史を変える物語。エネループ電池の残量とともに描かれる、科学技術による戦国絵巻。"
+topics: ["小説", "歴史", "科学技術", "戦国時代", "タイムスリップ", "数学", "物理", "砲術"]
+published: true
 price: 0
 chapters:
-  - episode_00_prologue
-  - episode_01_shrine_encounter
-  - episode_02_slide_rule_creation
-  - episode_03_first_artillery_test
-  - episode_04_lord_recruitment
-  - episode_05_artillery_corps_formation
-  - episode_06_first_battle
-  - episode_07_innovation_spread
-  - episode_08_setback_and_recovery
-  - episode_09_strategic_revolution
-  - episode_10_new_era
+  - "prologue"
+  - "shrine-encounter"
+  - "slide-rule-creation"
+  - "first-artillery-test"
+  - "lord-recruitment"
+  - "artillery-corps-formation"
+  - "first-battle"
+  - "innovation-spread"
+  - "setback-and-recovery"
+  - "strategic-revolution"
+  - "new-era"
