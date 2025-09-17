@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx zenn preview:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
