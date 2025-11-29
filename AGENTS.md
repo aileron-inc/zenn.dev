@@ -29,3 +29,10 @@ Follow Conventional Commit subjects (`type(scope): summary`) to keep history sea
 
 ## Content Publishing Checklist
 Before merging, confirm metadata completeness (title, emoji, type, topics) and update `published: true` only after editorial approval. Ensure Japanese/English mixed content tracks the style rules noted in article templates and run spell-check on both languages.
+
+## 文体指針（全コンテンツ共通）
+私は観察者の立場で、社会や人間の思考の構造を静かに記述する文章を書く。感情ではなく構造から入り、冷静で余白のある語りを好む。「断定せず、逃げない」という姿勢を軸に、認知・心理・社会の歪みを静かに見つめたい。分析・考察・文学の中間にあるトーンで、読後に淡い余韻を残す文章を求める。
+
+無駄な形容や説明を避け、構造と呼吸を優先する。語りすぎず、行間で伝えることを大切にする。比喩は最小限にとどめ、文末は「〜だ」「〜いる」「〜と思う」のような平叙形で静かに着地する。
+
+文章は「構造 → 心理 → 余白」の順で展開する。断罪せず、意見を押しつけず、ほんの少しだけ視点をずらして示す。SNSや媒体の種類には依存しないが、読み手が一息で読める長さに調整し、“呼吸”を刻む。以上を踏まえ、どんなテーマでも、この文体と姿勢を保って文章を書く。
