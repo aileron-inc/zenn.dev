@@ -293,37 +293,94 @@ const cache = {
 
 ## 実装パターン
 
-### サーバー側（Rails + ActiveModelSerializers風）
+### サーバー側（Rails）
+
+**重要なのは、各Serializerが独立していること**。Serializerが別のSerializerを呼び出したら、それはネストと同じだ。
 
 ```ruby
+# 各Serializerは自分自身のことだけ知っている
 class UserSerializer
-  def serialize(user, includes: [])
-    result = {
-      data: {
-        type: 'user',
-        id: user.id.to_s,
-        attributes: { name: user.name },
-        relationships: {
-          orders: {
-            data: user.orders.map { |o| { type: 'order', id: o.id.to_s } }
-          }
+  def initialize(user)
+    @user = user
+  end
+
+  def as_json
+    {
+      type: 'user',
+      id: @user.id.to_s,
+      attributes: { name: @user.name },
+      relationships: {
+        orders: {
+          data: @user.orders.map { |o| { type: 'order', id: o.id.to_s } }
         }
-      },
-      included: []
+      }
     }
+  end
+end
 
-    if includes.include?(:orders)
-      user.orders.each do |order|
-        result[:included] << OrderSerializer.new.to_resource(order)
-      end
-    end
+class OrderSerializer
+  def initialize(order)
+    @order = order
+  end
 
-    # 重複排除
-    result[:included].uniq! { |r| [r[:type], r[:id]] }
-    result
+  def as_json
+    {
+      type: 'order',
+      id: @order.id.to_s,
+      attributes: { total: @order.total },
+      relationships: {
+        items: {
+          data: @order.items.map { |i| { type: 'item', id: i.id.to_s } }
+        }
+      }
+    }
+  end
+end
+
+class CategorySerializer
+  def initialize(category)
+    @category = category
+  end
+
+  def as_json
+    {
+      type: 'category',
+      id: @category.id.to_s,
+      attributes: { name: @category.name }
+    }
   end
 end
 ```
+
+**Controllerが束ねる**。これが責務の分離だ。
+
+```ruby
+class UsersController < ApplicationController
+  def show
+    user = User.find(params[:id])
+    orders = user.orders.includes(items: { product: :category })
+    products = orders.flat_map { |o| o.items.map(&:product) }.uniq
+    categories = products.map(&:category).uniq
+
+    render json: {
+      data: UserSerializer.new(user).as_json,
+      included: [
+        *orders.map { |o| OrderSerializer.new(o).as_json },
+        *products.map { |p| ProductSerializer.new(p).as_json },
+        *categories.map { |c| CategorySerializer.new(c).as_json }
+      ]
+    }
+  end
+end
+```
+
+Serializerは他のSerializerを知らない。何を `included` に含めるかはControllerが決める。
+
+- ユーザー一覧では `included` なし
+- ユーザー詳細では注文まで含める
+- 管理画面ではカテゴリまで含める
+
+**同じSerializerを使い回せる**。これがフラットの強み。
 
 ### クライアント側（TypeScript）
 
