@@ -1,2 +1,6 @@
 node_modules
 .DS_Store
+
+# Hugo
+hugo-site/public/
+hugo-site/.hugo_build.lock

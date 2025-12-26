@@ -1,0 +1,221 @@
+---
+title: "シタデルアーキテクチャ：堅牢なシステム設計パターン"
+tags: ["architecture", "security", "design-pattern", "システム設計"]
+date: "2025-12-26T05:40:30+09:00"
+draft: false
+---
+
+この記事は Codex を利用して執筆しているため、記述に矛盾が含まれる可能性があります。お気づきの点があればぜひ教えてください。
+
+## シタデルアーキテクチャとは
+
+シタデルアーキテクチャ（Citadel Architecture）は、システムの中核となる重要な機能やデータを「城塞（シタデル）」のように防御する設計パターンです。中世の城塞都市が最も重要な施設を中心部に配置し、外側から内側へと複数の防御層を持つ構造に着想を得ています。
+
+## 基本概念
+
+### 多層防御モデル
+
+```
+外部インターフェース層
+    ↓
+検証・認証層
+    ↓
+ビジネスロジック層
+    ↓
+データアクセス層
+    ↓
+コア（シタデル）層 ← 最重要資産
+```
+
+システムを同心円状の層に分割し、外側から内側に向かうほど機密性・重要性が高まる構造を取ります。
+
+### 主要な原則
+
+1. **最小特権の原則**
+   - 各層は必要最小限の権限のみを持つ
+   - 内側の層へのアクセスは厳格に制御
+
+2. **防御の深層化**
+   - 複数の防御層により、一つが突破されても次の層で防御
+   - 各層で異なるセキュリティメカニズムを実装
+
+3. **明確な境界定義**
+   - 層間のインターフェースを明確に定義
+   - 通信は定義されたチャネルのみを使用
+
+4. **失敗時の安全性**
+   - エラー発生時は外側へ制御を戻す
+   - 機密情報の漏洩を防止
+
+## 実装例
+
+### Express.js でのシンプルな実装
+
+```javascript
+// 1. 外部インターフェース層
+app.use('/api', rateLimiter());
+
+// 2. 認証・認可層
+app.use('/api', authenticate);
+app.use('/api/admin', authorizeAdmin);
+
+// 3. ビジネスロジック層
+class PaymentService {
+  async processPayment(userId, amount) {
+    // 入力検証
+    this.validateInput(userId, amount);
+    
+    // コア層へのアクセス
+    return await this.citadelCore.executePayment(userId, amount);
+  }
+}
+
+// 4. コア（シタデル）層
+class PaymentCitadel {
+  async executePayment(userId, amount) {
+    // 最も重要な処理
+    // 外部からの直接アクセス不可
+    const transaction = await this.createTransaction();
+    await this.updateBalance(userId, amount);
+    await this.recordAuditLog(transaction);
+    return transaction;
+  }
+}
+```
+
+### Rails での実装例
+
+```ruby
+# app/controllers/api/payments_controller.rb
+class Api::PaymentsController < ApplicationController
+  before_action :authenticate_user!
+  before_action :authorize_payment_access
+  
+  def create
+    # ビジネスロジック層
+    result = PaymentService.new(current_user).process(payment_params)
+    
+    render json: result
+  end
+end
+
+# app/services/payment_service.rb
+class PaymentService
+  def initialize(user)
+    @user = user
+  end
+  
+  def process(params)
+    validate_params(params)
+    
+    # コア層へ委譲
+    Payment::Citadel.new(@user).execute(params)
+  end
+end
+
+# app/services/payment/citadel.rb
+module Payment
+  class Citadel
+    # コア層：外部から直接アクセス不可
+    def initialize(user)
+      @user = user
+    end
+    
+    def execute(params)
+      ActiveRecord::Base.transaction do
+        transaction = create_transaction(params)
+        update_balance(transaction)
+        audit_log(transaction)
+        transaction
+      end
+    end
+    
+    private
+    
+    # 最重要処理は private で保護
+    def create_transaction(params)
+      # ...
+    end
+  end
+end
+```
+
+## メリット
+
+### セキュリティの向上
+- 多層防御により攻撃面を削減
+- 機密データへのアクセス経路を限定
+- セキュリティ違反の早期検知
+
+### 保守性の向上
+- 責任の明確な分離
+- 変更の影響範囲が限定的
+- テストが容易
+
+### 拡張性
+- 新しい外部インターフェースの追加が容易
+- コア機能は変更せず、外側の層を拡張可能
+
+## デメリット・注意点
+
+### 複雑性の増加
+- 層が増えることでコードの複雑性が上がる
+- 小規模プロジェクトではオーバーエンジニアリングの可能性
+
+### パフォーマンスへの影響
+- 層を跨ぐたびにオーバーヘッド
+- 適切なキャッシング戦略が必要
+
+### 開発コストの増加
+- 初期設計に時間がかかる
+- 各層のインターフェース設計が重要
+
+## 適用シーン
+
+### 推奨される場合
+- 金融システム、医療システムなど高いセキュリティが要求される
+- 機密性の高いデータを扱う
+- 長期運用が想定される大規模システム
+- コンプライアンス要件が厳しい
+
+### 不向きな場合
+- 小規模なプロトタイプ
+- 短期間で廃棄されるシステム
+- パフォーマンスが最優先される場合
+
+## 類似パターンとの比較
+
+### レイヤードアーキテクチャとの違い
+- レイヤードアーキテクチャ：論理的な分離が主目的
+- シタデルアーキテクチャ：セキュリティと防御が主目的
+
+### オニオンアーキテクチャとの関係
+- 概念的には類似（依存関係が内側に向かう）
+- シタデルはセキュリティに特化
+- オニオンはドメインモデルの独立性を重視
+
+### ヘキサゴナルアーキテクチャとの組み合わせ
+```
+外部（Adapters）
+    ↓
+ポート層
+    ↓
+アプリケーション層
+    ↓
+シタデル（Domain Core）
+```
+
+ポート＆アダプターパターンと組み合わせることで、より柔軟で堅牢な設計が可能です。
+
+## まとめ
+
+シタデルアーキテクチャは、セキュリティと堅牢性を重視したシステム設計パターンです。多層防御の概念を活用し、重要な機能やデータを中心に配置することで、外部からの攻撃や予期しないアクセスから保護します。
+
+適用する際は、プロジェクトの要件（セキュリティ要求、規模、運用期間など）を考慮し、過度に複雑にならないよう注意しながら設計することが重要です。
+
+## 参考資料
+
+- セキュリティアーキテクチャの基本原則
+- Defense in Depth（深層防御）
+- Zero Trust Architecture
+- Clean Architecture / Onion Architecture

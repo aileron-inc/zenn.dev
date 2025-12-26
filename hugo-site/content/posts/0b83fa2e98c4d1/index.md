@@ -1,0 +1,77 @@
+---
+title: "Railsのcontrollerは凄いぜ!"
+tags: ["ruby","rails","controller"]
+date: "2025-12-26T05:40:30+09:00"
+draft: false
+---
+
+## きっかけは1行のcreate
+
+```ruby
+def create = Post.create!(post_params)
+      .tap { it.convert_to_streaming.call_later }
+      .tap { it.image.call_later }
+      .tap { redirect_to hq_post_path(it), notice: "投稿を作成しました" }
+```
+
+最近プロジェクトでこんな`create`アクションを書いたところ、Rails仲間のテンションが一気に爆上がりしました。Ruby 3.1以降で使える右代入や`tap`チェーンを並べると、**成功したときに起こる出来事が縦に揃う**ので読みやすさが段違いになります。`Post.create!`の戻り値を`it`に流し込み、「配信の準備」「画像生成」「最後のリダイレクト」とハッピーパスのイベントを自然に記述できるのがポイントです。
+
+## `.tap`でハッピーパスを縦に並べる
+
+`tap`はブロックを評価したあと、自身をそのまま返すメソッドです。だからこそ、複数の副作用を挟みながらも値を壊さず次の処理に渡せます。
+
+```ruby
+Post.create!(post_params)
+    .tap { it.convert_to_streaming.call_later }   # 非同期で配信準備
+    .tap { it.image.call_later }                     # 画像生成ジョブを予約
+    .tap { redirect_to hq_post_path(it), notice: "投稿を作成しました" }
+```
+
+Railsコントローラでありがちな`if`ネストや`return`だらけの分岐に悩まされず、「成功したときはこう進む」という流れが一直線に読めます。ビジネスロジックはサービスオブジェクトに寄せるとしても、**ハッピーパスの読みやすさだけはコントローラで守りたい**ときに効きます。
+
+## 「エラーパス」も綺麗に書きたい
+
+とはいえ現実には、バリデーションエラーや外部APIエラーなど、ハッピーパス以外のパターンも丁寧に扱いたいシチュエーションが山ほどあります。ここで`rescue`を差し込むとまた縦読みが崩れてしまうし、`if`で分岐するとハッピーパスが横に押しやられてしまいます。
+
+そんなときに頼れるのがRails標準の`rescue_from`ナリ。後から例外ハンドリングを宣言できるので、ハッピーパスのコードを崩さずに安心して戻り経路を増やせます。
+
+## `rescue_from`で後付けする
+
+`rescue_from`は`ActionController::Base`に用意された仕組みで、指定した例外が発生したときに任意のメソッドへ処理を移すナリ。コントローラの冒頭で宣言するだけで、ハッピーパスのコードはそのまま保ちつつエラーパスを後付けできます。
+
+```ruby
+class Hq::PostsController < ApplicationController
+  rescue_from ActiveRecord::RecordInvalid, with: :render_invalid
+  rescue_from ExternalApi::Error, with: :notify_external_failure
+
+  def create = Post
+    .create!(post_params)
+    .tap { it.convert_to_streaming.call_later }
+    .tap { it.image.call_later }
+    .tap { redirect_to hq_post_path(it), notice: "投稿を作成しました" }
+
+  private
+
+  def render_invalid(error)
+    flash.now[:alert] = error.record.errors.full_messages.to_sentence
+    render :new, status: :unprocessable_entity
+  end
+
+  def notify_external_failure(error)
+    Sentry.capture_exception(error)
+    redirect_to hq_posts_path, alert: "配信予約に失敗しました"
+  end
+end
+```
+
+ハッピーパスは`create`メソッド内にきれいに並べたまま、`rescue_from`で失敗時の挙動を別メソッドへ引き受けさせています。ハンドラの追加・変更は宣言を1行増やすだけなので、レビューでも「この例外を捕まえようナリ」と提案しやすくなります。
+
+## 実践ポイント
+
+- **ハッピーパスを最優先で縦に描く。** 成功時のストーリーが一直線だと、レビューでの「まず成功時どう動くか」を追いやすい。
+- **レスキュー経路は後から宣言する。** `rescue_from`ならハンドラを後付けでき、仕様追加のたびに`rescue`を足して崩れる心配が減る。
+- **コントローラは入口としての役割に集中させる。** 細かな副作用は`tap`のブロックでサービスやジョブに委ね、責務の境界がはっきりする。
+
+## まとめ
+
+Railsコントローラはまだまだ進化させられます。`tap`チェーンでハッピーパスを縦に揃え、`rescue_from`で失敗経路を後付けするだけで、毎日のレビュー体験がぐっと軽くなりました。ハッピーパスもエラーパスも両方きちんと書ききりたいとき、ぜひ試してみてください。

@@ -1,0 +1,22 @@
+baseURL = 'https://aileron-inc.github.io/zenn.dev/'
+languageCode = 'ja'
+title = 'Tech Blog'
+theme = 'PaperMod'
+
+[params]
+  description = "Technical articles and notes"
+  author = "Author Name"
+  
+[params.homeInfoParams]
+  Title = "Welcome"
+  Content = "技術記事とノート"
+
+[menu]
+  [[menu.main]]
+    name = "Articles"
+    url = "/posts/"
+    weight = 1
+  [[menu.main]]
+    name = "Tags"
+    url = "/tags/"
+    weight = 2
