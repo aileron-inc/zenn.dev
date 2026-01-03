@@ -10,211 +10,118 @@ published: true
 
 RAG（Retrieval-Augmented Generation）は強力だ。ベクトル検索で関連ドキュメントを取得し、LLMに渡す。しかし、すべてのユースケースにRAGが必要だろうか？
 
-実は、多くのケースで**もっとシンプルな方法**が有効だ。
+実は、**LLMに直接NDJSONファイルを読ませて「検索して」とお願いするだけ**で、多くのケースは解決する。
 
 ```
 RAGアーキテクチャ:
 ドキュメント → Embedding → ベクトルDB → 類似検索 → LLM → 回答
 
 シンプルアーキテクチャ:
-NDJSON → grep/テキスト検索 → LLM → 回答
+NDJSON → OpenCodeが直接読んで検索 → 回答
 ```
 
-この記事では、NDJSON + OpenCode + Slack Bot (Socket Mode) を組み合わせた、**RAGを使わないシンプルな検索システム**を紹介する。
+検索ロジックすら自分で書く必要がない。OpenCodeにファイルを渡して「探して」と言えばいい。
 
-## なぜRAGを使わないのか
+## 発想の転換
 
-RAGには以下のコストがかかる：
+従来の考え方：
+```
+1. 検索システムを実装する
+2. 検索結果をLLMに渡す
+3. LLMが回答を生成する
+```
 
-- **Embedding生成コスト**：ドキュメントをベクトル化するAPI呼び出し
-- **ベクトルDB運用コスト**：Pinecone、Weaviate、pgvectorなどの管理
-- **複雑性**：チャンク分割、埋め込みモデル選定、検索パラメータ調整
+新しい考え方：
+```
+1. NDJSONファイルをOpenCodeに渡す
+2. 「この中から〇〇を探して回答して」とお願いする
+3. 終わり
+```
 
-一方、以下のようなケースではRAGは過剰だ：
-
-- ドキュメント数が数千件以下
-- 構造化されたデータ（JSON）を扱う
-- キーワード検索で十分な精度が出る
-- リアルタイム更新が必要
-
-そこで登場するのが**NDJSON**だ。
+**検索もLLMにやらせればいい。** OpenCodeはファイルを読む能力がある。NDJSONの各行を見て、関連する情報を見つけ出すのはLLMの得意技だ。
 
 ## NDJSONとは
 
 NDJSON（Newline Delimited JSON）は、1行1JSONオブジェクトの形式だ。
 
 ```ndjson
-{"id": 1, "title": "Railsの始め方", "content": "Railsは..."}
-{"id": 2, "title": "Dockerの基礎", "content": "Dockerは..."}
-{"id": 3, "title": "AWSの設定", "content": "AWSの..."}
+{"id": 1, "name": "田中太郎", "interests": ["Ruby", "Rails"], "skill_level": "senior"}
+{"id": 2, "name": "鈴木花子", "interests": ["Python", "機械学習"], "skill_level": "middle"}
+{"id": 3, "name": "佐藤次郎", "interests": ["Go", "Kubernetes"], "skill_level": "senior"}
 ```
 
-### NDJSONの利点
+### なぜNDJSONか
 
-1. **追記が簡単**：ファイル末尾に1行追加するだけ
-2. **ストリーミング処理**：1行ずつ読み込める
-3. **grep互換**：普通のテキストツールで検索可能
-4. **Git管理しやすい**：差分が行単位で見える
-5. **データベース不要**：ファイルだけで完結
-
-```bash
-# "Rails" を含む行を検索
-grep "Rails" knowledge.ndjson
-
-# jqでフィルタリング
-cat knowledge.ndjson | jq -c 'select(.category == "技術")'
-```
+- **1行1レコード**：LLMが読みやすい
+- **追記が簡単**：新しいレコードは末尾に1行追加
+- **grep互換**：デバッグも簡単
+- **Git管理**：差分が行単位で見える
 
 ## システム構成
 
 ```
 ┌─────────────┐      ┌──────────────┐      ┌─────────────┐
-│  Slack Bot  │ ──→  │   OpenCode   │ ──→  │    LLM      │
-│(Socket Mode)│      │   Server     │      │(Claude/Grok)│
+│  Slack Bot  │ ──→  │   OpenCode   │ ──→  │  NDJSON     │
+│(Socket Mode)│      │   Server     │      │  ファイル   │
 └─────────────┘      └──────────────┘      └─────────────┘
-       ↓                    ↓
-       │             ┌──────────────┐
-       └────────────→│   NDJSON     │
-                     │   データ     │
+                            │
+                            ↓
+                     ┌──────────────┐
+                     │     LLM      │
+                     │ (検索も回答も)│
                      └──────────────┘
 ```
 
-- **Slack Bot (Socket Mode)**：ユーザーからの問い合わせを受け付け
-- **NDJSON**：ナレッジベース（検索対象データ）
-- **OpenCode Server**：LLMとの通信を抽象化
-- **LLM**：検索結果をもとに回答生成
+ポイントは**検索ロジックがない**こと。OpenCodeがNDJSONを読み、LLMが検索も回答生成も両方やる。
 
-## Slack Bot (Socket Mode) とは
+## 実装例：社内メンバーレコメンド
 
-Slack Botには2つの接続方式がある：
-
-| 方式 | 特徴 |
-|------|------|
-| HTTP (Webhook) | 公開URLが必要、HTTPリクエストを受信 |
-| **Socket Mode** | WebSocket接続、ファイアウォール内でも動作 |
-
-Socket Modeは**WebSocketで常時接続**するため：
-
-- 公開URLが不要（ローカル開発に最適）
-- NATやファイアウォールを気にしなくていい
-- レイテンシが低い
-
-```bash
-# 必要な環境変数
-SLACK_BOT_TOKEN=xoxb-xxxxx     # Bot Token
-SLACK_APP_TOKEN=xapp-xxxxx     # App-Level Token（Socket Mode用）
-```
-
-## 実装
-
-### 1. NDJSONナレッジベースの作成
-
-まず、検索対象のデータをNDJSON形式で用意する。
+### 1. NDJSONでメンバー情報を管理
 
 ```ndjson
-{"id": "doc-001", "title": "新規プロジェクトの立ち上げ手順", "category": "プロセス", "content": "1. リポジトリ作成 2. 開発環境構築 3. CI/CD設定...", "tags": ["プロジェクト", "開発環境"]}
-{"id": "doc-002", "title": "本番デプロイ手順", "category": "運用", "content": "1. PRレビュー 2. マージ 3. デプロイ承認...", "tags": ["デプロイ", "本番"]}
-{"id": "doc-003", "title": "障害対応フロー", "category": "運用", "content": "1. 検知 2. 影響範囲特定 3. 復旧作業...", "tags": ["障害", "インシデント"]}
+{"id": 1, "name": "田中太郎", "department": "開発", "skills": ["Ruby", "Rails", "PostgreSQL"], "projects": ["ECサイト", "API基盤"]}
+{"id": 2, "name": "鈴木花子", "department": "開発", "skills": ["Python", "TensorFlow", "データ分析"], "projects": ["レコメンドエンジン"]}
+{"id": 3, "name": "佐藤次郎", "department": "インフラ", "skills": ["AWS", "Terraform", "Kubernetes"], "projects": ["クラウド移行"]}
+{"id": 4, "name": "山田三郎", "department": "開発", "skills": ["TypeScript", "React", "Next.js"], "projects": ["管理画面刷新"]}
+{"id": 5, "name": "伊藤四郎", "department": "開発", "skills": ["Go", "gRPC", "マイクロサービス"], "projects": ["決済基盤"]}
 ```
 
-新しいナレッジの追加は1行追記するだけ：
-
-```bash
-echo '{"id": "doc-004", "title": "新しいドキュメント", ...}' >> knowledge.ndjson
-```
-
-### 2. 検索モジュール
-
-NDJSONを検索するRubyモジュール：
-
-```ruby
-# lib/ndjson_search.rb
-module NdjsonSearch
-  class << self
-    def search(file_path, query, limit: 5)
-      results = []
-
-      File.foreach(file_path) do |line|
-        doc = JSON.parse(line)
-        score = calculate_score(doc, query)
-        results << { doc: doc, score: score } if score > 0
-      end
-
-      results
-        .sort_by { |r| -r[:score] }
-        .first(limit)
-        .map { |r| r[:doc] }
-    end
-
-    private
-
-    def calculate_score(doc, query)
-      score = 0
-      query_terms = query.downcase.split(/\s+/)
-
-      # タイトルマッチは重み付け高め
-      query_terms.each do |term|
-        score += 3 if doc['title']&.downcase&.include?(term)
-        score += 2 if doc['tags']&.any? { |t| t.downcase.include?(term) }
-        score += 1 if doc['content']&.downcase&.include?(term)
-      end
-
-      score
-    end
-  end
-end
-```
-
-### 3. Slack Bot (Socket Mode)
+### 2. Slack Botの実装
 
 ```ruby
 # slack_bot.rb
 require 'slack-ruby-client'
-require 'json'
-require_relative 'lib/ndjson_search'
-require_relative 'lib/opencode_client'
+require 'faraday'
 
 Slack.configure do |config|
   config.token = ENV['SLACK_BOT_TOKEN']
 end
 
-# Socket Mode クライアント
 client = Slack::RealTime::Client.new
 
 client.on :message do |data|
-  next if data.bot_id # Bot自身のメッセージは無視
-  next unless data.text&.include?('<@') # メンションのみ反応
+  next if data.bot_id
+  next unless data.text&.include?('<@')
 
   query = data.text.gsub(/<@[A-Z0-9]+>/, '').strip
 
-  # NDJSONから検索
-  results = NdjsonSearch.search('knowledge.ndjson', query)
+  # NDJSONファイルの内容を読む
+  members_ndjson = File.read('members.ndjson')
 
-  if results.empty?
-    client.web_client.chat_postMessage(
-      channel: data.channel,
-      text: "該当するドキュメントが見つかりませんでした。",
-      thread_ts: data.ts
-    )
-    next
-  end
-
-  # 検索結果をLLMに渡して回答生成
-  context = results.map do |doc|
-    "## #{doc['title']}\n#{doc['content']}"
-  end.join("\n\n")
-
+  # OpenCodeに「検索して」とお願いするだけ
   prompt = <<~PROMPT
-    以下のドキュメントを参考に、ユーザーの質問に回答してください。
+    以下はメンバー情報のNDJSONです。各行が1人のメンバーを表しています。
 
-    【ドキュメント】
-    #{context}
+    ```ndjson
+    #{members_ndjson}
+    ```
 
-    【質問】
-    #{query}
+    ユーザーからの質問: #{query}
+
+    この質問に最も適したメンバーを探して、なぜその人が適任なのか説明してください。
   PROMPT
 
-  response = OpencodeClient.chat(prompt)
+  response = opencode_chat(prompt)
 
   client.web_client.chat_postMessage(
     channel: data.channel,
@@ -223,151 +130,127 @@ client.on :message do |data|
   )
 end
 
+def opencode_chat(message)
+  conn = Faraday.new(url: 'http://localhost:4096')
+  session = JSON.parse(conn.post('/session').body)
+  res = conn.post("/session/#{session['id']}/message") do |req|
+    req.headers['Content-Type'] = 'application/json'
+    req.body = { content: message }.to_json
+  end
+  JSON.parse(res.body)['content']
+end
+
 client.start!
 ```
 
-### 4. OpenCode クライアント
+### 3. 使ってみる
 
-```ruby
-# lib/opencode_client.rb
-require 'faraday'
-
-module OpencodeClient
-  OPENCODE_URL = ENV.fetch('OPENCODE_URL', 'http://localhost:4096')
-
-  class << self
-    def chat(message)
-      conn = connection
-
-      # セッション作成
-      session_res = conn.post('/session')
-      session = JSON.parse(session_res.body)
-
-      # メッセージ送信
-      res = conn.post("/session/#{session['id']}/message") do |req|
-        req.body = { content: message }.to_json
-      end
-
-      result = JSON.parse(res.body)
-      result['content']
-    end
-
-    private
-
-    def connection
-      @connection ||= Faraday.new(url: OPENCODE_URL) do |f|
-        f.request :json
-        f.response :json
-        f.adapter Faraday.default_adapter
-      end
-    end
-  end
-end
+Slackで：
+```
+@bot Kubernetes詳しい人いる？
 ```
 
-## 起動方法
+Botの回答：
+```
+佐藤次郎さんがおすすめです。
 
-```bash
-# ターミナル1: OpenCode Serverを起動
-opencode --hostname localhost --port 4096
-
-# ターミナル2: Slack Botを起動
-SLACK_BOT_TOKEN=xoxb-xxx SLACK_APP_TOKEN=xapp-xxx ruby slack_bot.rb
+理由：
+- スキルにKubernetesを持っています
+- インフラ部門でクラウド移行プロジェクトを担当
+- AWS、Terraformも扱えるので、インフラ全般の相談が可能です
 ```
 
-Slackで `@bot デプロイ手順教えて` と投稿すると：
+**検索ロジックは一切書いていない。** OpenCodeにNDJSONを渡して「探して」と言っただけ。
 
-1. BotがSocket Mode経由でメッセージを受信
-2. NDJSONから「デプロイ」に関連するドキュメントを検索
-3. 検索結果をOpenCode Server経由でLLMに送信
-4. LLMが回答を生成
-5. Slackスレッドに回答を投稿
+## なぜこれで十分なのか
 
-## なぜこのアーキテクチャが良いのか
+### LLMの能力を活かす
 
-### 1. 運用がシンプル
+LLMは：
+- JSONを読める
+- 文脈を理解できる
+- 「似ている」を判断できる
 
-```
-RAG構成:
-- Embedding APIの契約・課金管理
-- ベクトルDBのホスティング
-- インデックス再構築の運用
-- チャンク戦略の調整
+わざわざベクトル検索を挟む必要がない。「Kubernetes詳しい人」という質問に対して、スキルに「Kubernetes」があるレコードを見つけるのは、LLMにとって簡単な作業だ。
 
-NDJSON構成:
-- ファイルを1つ管理するだけ
-```
+### 規模の問題
 
-### 2. デバッグが容易
+「でも大量のデータだと？」
 
-```bash
-# 何が検索されているか一目瞭然
-grep "デプロイ" knowledge.ndjson
+確かにNDJSONが1万行あったら、全部をプロンプトに入れるのは現実的ではない。しかし：
 
-# ドキュメントの追加・修正が即座に反映
-vim knowledge.ndjson
-```
+- 社内メンバー：数十〜数百人
+- 商品カタログ（小規模）：数百〜数千件
+- FAQ：数十〜数百件
 
-### 3. Git管理と相性がいい
+これくらいの規模なら、全部プロンプトに入れても問題ない。**RAGが必要になるのは、もっと大規模になってから**だ。
 
-```bash
-git diff knowledge.ndjson
-# + {"id": "doc-005", "title": "新しい手順", ...}
+## 応用例
 
-git log --oneline knowledge.ndjson
-# ナレッジの変更履歴が追跡可能
+### 商品レコメンド
+
+```ndjson
+{"id": "p001", "name": "ワイヤレスイヤホン", "category": "オーディオ", "price": 15000, "features": ["ノイズキャンセリング", "防水", "長時間再生"]}
+{"id": "p002", "name": "有線イヤホン", "category": "オーディオ", "price": 3000, "features": ["高音質", "軽量"]}
 ```
 
-### 4. コストが低い
-
-- Embedding APIの呼び出し: **不要**
-- ベクトルDBのホスティング: **不要**
-- 必要なのはLLM APIの呼び出しのみ
-
-## RAGが必要になるとき
-
-もちろん、RAGが必要なケースもある：
-
-| NDJSON検索で十分 | RAGが必要 |
-|-----------------|----------|
-| ドキュメント数千件以下 | 数万件以上 |
-| キーワードマッチで探せる | 意味的類似性が必要 |
-| 構造化されたデータ | 非構造化テキスト大量 |
-| リアルタイム更新重視 | 精度最優先 |
-
-システムが成長してきたら、NDJSONからベクトルDBへの移行を検討すればいい。最初からRAGを構築する必要はない。
-
-## 発展: 複数ファイル対応
-
-ナレッジが増えてきたら、カテゴリごとにファイルを分割できる：
-
 ```
-knowledge/
-├── processes.ndjson    # 業務プロセス
-├── tech.ndjson         # 技術ドキュメント
-├── faq.ndjson          # よくある質問
-└── incidents.ndjson    # 障害事例
+@bot 予算1万円でノイキャン付きのイヤホンある？
 ```
 
-```ruby
-# 複数ファイルを横断検索
-Dir.glob('knowledge/*.ndjson').flat_map do |file|
-  NdjsonSearch.search(file, query, limit: 3)
-end.sort_by { |doc| -doc[:score] }.first(5)
+### 社内FAQ
+
+```ndjson
+{"q": "有給の申請方法は？", "a": "勤怠システムから申請してください。上長承認が必要です。"}
+{"q": "経費精算の締め日は？", "a": "毎月25日です。26日以降は翌月処理になります。"}
 ```
+
+```
+@bot 経費っていつまでに出せばいい？
+```
+
+### ナレッジベース
+
+```ndjson
+{"title": "本番デプロイ手順", "content": "1. PRをマージ 2. CI通過を確認 3. デプロイボタンをクリック"}
+{"title": "障害対応フロー", "content": "1. #incident チャンネルに報告 2. 影響範囲を特定 3. 復旧作業"}
+```
+
+```
+@bot デプロイってどうやるんだっけ？
+```
+
+## Socket Modeを使う理由
+
+Slack Botには2つの接続方式がある：
+
+| 方式 | 特徴 |
+|------|------|
+| HTTP (Webhook) | 公開URLが必要 |
+| **Socket Mode** | WebSocket接続、ローカルでも動作 |
+
+Socket Modeなら：
+- ngrokなどのトンネリング不要
+- ファイアウォール内でも動作
+- ローカル開発が簡単
 
 ## まとめ
 
-NDJSON + OpenCode + Slack Bot (Socket Mode) の組み合わせで：
+```
+従来: データ → 検索システム構築 → ベクトルDB → RAG → LLM
+今回: データ → NDJSON → OpenCodeに渡す → 終わり
+```
 
-1. **RAG不要**：ベクトルDBなしでナレッジ検索
-2. **Socket Mode**：ローカルでも動作するSlack Bot
-3. **シンプル運用**：ファイル1つで完結
-4. **即座に反映**：ナレッジ追加は1行追記
+小規模なデータなら、**検索もLLMにやらせればいい**。
 
-「とりあえずRAG」と考える前に、**本当にRAGが必要か**を考えてみよう。多くのケースで、このシンプルなアーキテクチャで十分だ。
+- メンバー検索
+- 商品レコメンド
+- FAQ検索
+- ナレッジベース
 
-まずは小さく始めて、必要になったら複雑化すればいい。
+これらは数百〜数千件程度。NDJSONをそのままLLMに渡して「探して」とお願いするだけで動く。
+
+RAGは強力だが、**必要になるまで導入しなくていい**。まずはNDJSON + OpenCodeのシンプルな構成で始めよう。
 
 ---
 
@@ -375,5 +258,4 @@ NDJSON + OpenCode + Slack Bot (Socket Mode) の組み合わせで：
 
 - [NDJSON 仕様](http://ndjson.org/)
 - [Slack Socket Mode](https://api.slack.com/apis/connections/socket)
-- [OpenCode Server](https://opencode.ai/docs/server/)
-- [slack-ruby-client](https://github.com/slack-ruby/slack-ruby-client)
+- [OpenCode](https://opencode.ai/)
